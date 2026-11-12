@@ -25,7 +25,7 @@ from src.models.frontier_url import FrontierUrl
 from src.models.seed_site import SeedSite
 from src.models.user import User
 from src.services import canonicalizer, coverage_service, scheduler
-from src.services.task_service import _queued_urls, _site_configs
+from src.services.task_service import _queued_urls, build_quota_snapshot, configs_from_snapshot
 from src.utils.logger import get_logger
 from src.utils.password import hash_password
 
@@ -423,15 +423,8 @@ def _seed_tasks(db: Session) -> list[CrawlTask]:
         if db.query(CrawlTask).filter(CrawlTask.name == spec["name"]).one_or_none() is not None:
             continue
         sites = db.query(SeedSite).filter(SeedSite.domain.in_(spec["site_ids"])).all()
-        quota_snapshot = {
-            site.domain: {
-                "qps_quota": site.qps_quota,
-                "crawl_delay_s": site.crawl_delay_s,
-                "max_concurrency": site.max_concurrency,
-                "priority": site.priority,
-            }
-            for site in sorted(sites, key=lambda item: item.domain)
-        }
+        # 与线上创建路径一致：创建时冻结配额快照，模拟只读快照
+        quota_snapshot = build_quota_snapshot(sites)
         task = CrawlTask(
             name=spec["name"],
             site_ids=json.dumps(spec["site_ids"]),
@@ -447,7 +440,8 @@ def _seed_tasks(db: Session) -> list[CrawlTask]:
         db.add(task)
         db.flush()
         if spec["simulate"]:
-            configs = _site_configs(db, spec["site_ids"])
+            sites_by_domain = {site.domain: site for site in sites}
+            configs = configs_from_snapshot(quota_snapshot, spec["site_ids"], sites_by_domain)
             urls = _queued_urls(db, spec["site_ids"])
             if configs and urls:
                 result = scheduler.simulate(

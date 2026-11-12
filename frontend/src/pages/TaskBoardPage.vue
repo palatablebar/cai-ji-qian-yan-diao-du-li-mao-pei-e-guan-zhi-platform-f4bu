@@ -7,13 +7,74 @@
     >
       <template #actions>
         <RouterLink class="btn" to="/tasks">← 任务列表</RouterLink>
-        <button v-if="canSimulate" class="btn btn-primary" type="button" :disabled="tasks.simulating" @click="rerun">
-          {{ tasks.simulating ? '模拟中…' : '运行调度模拟' }}
+        <button
+          v-if="canSimulate"
+          class="btn btn-primary"
+          type="button"
+          :disabled="tasks.simulating || !!runDisabledReason"
+          :title="runDisabledReason || '按创建时冻结的配额运行调度模拟'"
+          @click="rerun"
+        >
+          {{ tasks.simulating ? '模拟中…' : runDisabledReason || '运行调度模拟' }}
         </button>
       </template>
     </PageHeader>
 
     <div v-if="tasks.error" class="banner">{{ tasks.error }}</div>
+
+    <section v-if="task" class="panel">
+      <div class="panel-head">
+        <h2>QUOTA FREEZE / 冻结配额</h2>
+        <span class="aside">
+          {{ task.quota_frozen ? `创建时冻结 · ${task.frozen_at ?? task.created_at}` : '旧数据未冻结' }} · 站点后续修改仅影响新任务
+        </span>
+      </div>
+      <div class="panel-body" style="display: grid; gap: 10px">
+        <div v-if="task.block_reason" class="banner">
+          阻止原因：{{ task.block_reason }}
+          <span v-if="task.blocked_at" class="muted">（{{ task.blocked_at }}）</span>
+        </div>
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>域</th>
+              <th class="num">qps</th>
+              <th class="num">delay(s)</th>
+              <th class="num">并发</th>
+              <th class="num">优先级</th>
+              <th>robots</th>
+              <th>与当前配置差异</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="domain in task.site_domains" :key="domain">
+              <td>{{ domain }}</td>
+              <td class="num">{{ task.quota_snapshot[domain]?.qps_quota ?? '—' }}</td>
+              <td class="num">{{ task.quota_snapshot[domain]?.crawl_delay_s ?? '—' }}</td>
+              <td class="num">{{ task.quota_snapshot[domain]?.max_concurrency ?? '—' }}</td>
+              <td class="num">{{ task.quota_snapshot[domain]?.priority ?? '—' }}</td>
+              <td>
+                <StatusTag :value="task.quota_snapshot[domain]?.robots_status ?? 'allow'" kind="robots" />
+              </td>
+              <td>
+                <template v-if="diffsOf(domain).length">
+                  <span v-for="d in diffsOf(domain)" :key="d.field" class="tag amber" style="margin-right: 4px">
+                    {{ fieldLabel(d.field) }}：{{ fmtVal(d.frozen) }} → {{ fmtVal(d.current) }}
+                  </span>
+                </template>
+                <span v-else class="tag green">一致</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="gauge-meta">
+          <span>调度模拟只读取以上冻结值；站点页改配额后冻结值不变，差异列标出漂移项。</span>
+          <span v-if="task.quota_diff.length" class="sig-amber">
+            漂移 {{ task.quota_diff.length }} 项 · 仅影响新建任务
+          </span>
+        </div>
+      </div>
+    </section>
 
     <template v-if="result">
       <div class="metric-row">
@@ -202,7 +263,13 @@
           hint="点击右上角「运行调度模拟」：虚拟时钟按域令牌桶出队，固定注入 2 次 429 探测并在第 10 位检查饥饿提升，全程不发真实网络请求。"
         >
           <template #action>
-            <button v-if="canSimulate" class="btn btn-primary" type="button" :disabled="tasks.simulating" @click="rerun">
+            <button
+              v-if="canSimulate"
+              class="btn btn-primary"
+              type="button"
+              :disabled="tasks.simulating || !!runDisabledReason"
+              @click="rerun"
+            >
               运行调度模拟
             </button>
           </template>
@@ -220,10 +287,12 @@ import MetricBlock from '../components/common/MetricBlock.vue'
 import QuotaGauge from '../components/common/QuotaGauge.vue'
 import CanonicalDiff from '../components/common/CanonicalDiff.vue'
 import EmptyState from '../components/common/EmptyState.vue'
+import StatusTag from '../components/common/StatusTag.vue'
 import { useTasksStore } from '../stores/tasksStore'
 import { useAuthStore } from '../stores/authStore'
+import { QUOTA_FIELD_LABELS } from '../constants/enums'
 import { truncate } from '../utils/format'
-import type { SequenceItem } from '../types/task'
+import type { QuotaDiffItem, SequenceItem } from '../types/task'
 import type { ApiError } from '../types/api'
 
 const route = useRoute()
@@ -234,6 +303,29 @@ const selectedSeq = ref<SequenceItem | null>(null)
 const canSimulate = computed(() => auth.can('tasks:simulate'))
 const task = computed(() => tasks.current)
 const result = computed(() => tasks.current?.scheduler_result ?? null)
+
+/** 已确认结果 / 运行中的任务不可重跑（后端同样 409 拦截）。 */
+const runDisabledReason = computed(() => {
+  const current = task.value
+  if (!current) return ''
+  if (current.status === 'finished') return '结果已确认 · 不可重跑'
+  if (current.status === 'running') return '任务运行中'
+  return ''
+})
+
+function diffsOf(domain: string): QuotaDiffItem[] {
+  return (task.value?.quota_diff ?? []).filter((item) => item.domain === domain)
+}
+
+function fieldLabel(field: string): string {
+  return QUOTA_FIELD_LABELS[field] ?? field
+}
+
+function fmtVal(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '—'
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value)
+}
 
 onMounted(async () => {
   const taskId = String(route.params.id)
@@ -248,6 +340,8 @@ async function rerun() {
     if (result.value?.sequence?.length) selectedSeq.value = result.value.sequence[0]
   } catch (error) {
     tasks.error = (error as ApiError).message ?? '调度模拟失败'
+    // 409 阻止后刷新详情，展示持久化的阻止原因
+    await tasks.loadDetail(taskId)
   }
 }
 </script>

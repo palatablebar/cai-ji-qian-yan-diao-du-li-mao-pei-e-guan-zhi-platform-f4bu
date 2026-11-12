@@ -16,8 +16,8 @@
 | 进近管制登录 | `/login` | 三账号登录，JWT + RBAC |
 | 站点与配额 | `/sites` | 6 站点 robots/qps/crawl-delay/并发/优先级；管理员可改，只读角色 403 |
 | URL 前沿 | `/frontier` | 300 raw → 260 唯一 → 折叠 40；规范化前后对比、布隆过滤器统计、规范化试算 |
-| 采集任务 | `/tasks` | 任务列表 + 创建；只读角色创建 403 |
-| 调度看板 | `/tasks/:id` | 域令牌桶余量、实发 qps、40 条调度序列、2 次 429 退避、1 次饥饿提升、信号带 |
+| 采集任务 | `/tasks` | 任务列表 + 创建；创建时冻结站点配额快照；只读角色创建 403 |
+| 调度看板 | `/tasks/:id` | 冻结配额表、与当前站点配置漂移项、阻止原因；域令牌桶余量、实发 qps、40 条调度序列、2 次 429 退避、1 次饥饿提升、信号带 |
 | 抓取记录 | `/fetches` | 500 条 seed 记录 + 模拟记录；429 退避时间线、按域退避汇总 |
 | 覆盖度审计 | `/audits` | 覆盖率 73.33%（88/120）与 88.00%（110/125）、缺口明细、缺口 CSV（合计 47 行） |
 
@@ -47,6 +47,20 @@
 - 输出：调度序列（≤40 条）、每域实发 qps / 令牌余量 / 信号灯、退避事件、饥饿提升记录、
   robots 阻塞清单、`digest = sha256(sequence)`（同 seed 逐字可复现）
 - 失败态：任务站点下无排队 URL → 409；只读角色 → 403
+
+### 配额冻结与运行护栏（任务级）
+
+- **创建时冻结**：`POST /tasks` 把站点配额（qps / crawl-delay / 并发 / 优先级 / robots）写入
+  `crawl_tasks.quota_snapshot`，调度模拟只读该快照，快照永不被回写；
+  之后在 `/sites` 改配额只影响新建任务。`enabled` 是安全开关，始终按当前值判定（停用即 409）。
+- **结果不可覆盖**：`finished` 任务重跑 → 409 `task_already_confirmed`，调度结果与抓取记录
+  （`origin=simulation`）保持原样，不删不改；抓取记录只在首次成功时写入一次。
+- **同站点互斥**：运行尝试按域取 PostgreSQL advisory lock 串行化，拿到锁后检查
+  「同站点 running 任务」→ 409 `site_run_conflict`（带 `blocked_by` 明细），配额不并发叠加；
+  同任务并发重跑 → 409 `task_already_running`。
+- **看板可见**：任务详情/列表返回 `quota_frozen` / `frozen_at` / `quota_diff`（冻结值 vs 当前值
+  逐项漂移）/ `block_reason` / `blocked_at`；每次被阻止的运行都会落 `last_block_reason` 并写
+  审计 `task.simulate_blocked`。
 
 ## 快速启动（Docker Compose，5 服务）
 

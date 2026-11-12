@@ -93,12 +93,33 @@ export interface SchedulerResult {
   generated_at: string
 }
 
+export interface QuotaSnapshotEntry {
+  qps_quota?: number
+  crawl_delay_s?: number
+  max_concurrency?: number
+  priority?: number
+  robots_status?: string
+  robots_rules?: { disallow: string[]; allow: string[] }
+}
+
+export interface QuotaDiffItem {
+  domain: string
+  field: string
+  frozen: unknown
+  current: unknown
+}
+
 export interface CrawlTask {
   id: string
   name: string
   site_domains: string[]
   concurrency: number
-  quota_snapshot: Record<string, Record<string, number>>
+  quota_snapshot: Record<string, QuotaSnapshotEntry>
+  quota_frozen: boolean
+  frozen_at: string | null
+  quota_diff: QuotaDiffItem[]
+  block_reason: string
+  blocked_at: string | null
   status: TaskStatus
   seed: number
   window_s: number

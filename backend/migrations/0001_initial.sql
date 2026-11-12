@@ -62,6 +62,8 @@ CREATE TABLE IF NOT EXISTS crawl_tasks (
   created_by VARCHAR(120) NOT NULL DEFAULT '',
   started_at TIMESTAMPTZ,
   finished_at TIMESTAMPTZ,
+  last_block_reason TEXT NOT NULL DEFAULT '',
+  last_blocked_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL
 );
 

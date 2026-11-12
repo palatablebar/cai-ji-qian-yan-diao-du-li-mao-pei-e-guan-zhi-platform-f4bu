@@ -3,7 +3,7 @@
     <PageHeader
       kicker="TOWER / CRAWL TASKS"
       title="采集任务与调度入口"
-      sub="任务 = 站点集合 + 调度窗口 + 序列上限。创建权限：调度主管 / 采集工程师；只读观察员 POST 会被后端 RBAC 拒绝（403）。"
+      sub="任务 = 站点集合 + 调度窗口 + 序列上限。创建时冻结站点配额快照（后续改站点仅影响新任务）；已确认结果不可重跑，同站点任务互斥不叠加配额。创建权限：调度主管 / 采集工程师。"
     >
       <template #actions>
         <button class="btn" type="button" :disabled="tasks.loading" @click="tasks.load()">刷新任务</button>
@@ -42,7 +42,21 @@
             <tr v-for="task in tasks.items" :key="task.id">
               <td>
                 <div>{{ task.name }}</div>
-                <div class="muted" style="font-size: 10px">窗口 {{ task.window_s }}s · 序列上限 {{ task.max_sequence }}</div>
+                <div class="muted" style="font-size: 10px">
+                  窗口 {{ task.window_s }}s · 序列上限 {{ task.max_sequence }}
+                  <span v-if="task.quota_frozen" class="tag muted" style="margin-left: 4px">配额已冻结</span>
+                  <span
+                    v-if="task.quota_diff.length"
+                    class="tag amber"
+                    style="margin-left: 4px"
+                    :title="diffTitle(task)"
+                  >
+                    漂移 {{ task.quota_diff.length }}
+                  </span>
+                </div>
+                <div v-if="task.block_reason" class="sig-red" style="font-size: 10px" :title="task.block_reason">
+                  阻止：{{ task.block_reason }}
+                </div>
               </td>
               <td>{{ task.site_domains.length }} 域</td>
               <td><StatusTag :value="task.status" kind="task" /></td>
@@ -57,7 +71,14 @@
                     v-if="canSimulate"
                     class="btn btn-small"
                     type="button"
-                    :disabled="tasks.simulating"
+                    :disabled="tasks.simulating || task.status === 'finished' || task.status === 'running'"
+                    :title="
+                      task.status === 'finished'
+                        ? '结果已确认，不能重复运行'
+                        : task.status === 'running'
+                          ? '任务运行中'
+                          : '按冻结配额运行调度模拟'
+                    "
                     @click="runSimulation(task.id)"
                   >
                     运行
@@ -132,6 +153,7 @@ import StatusTag from '../components/common/StatusTag.vue'
 import { useTasksStore } from '../stores/tasksStore'
 import { useSitesStore } from '../stores/sitesStore'
 import { useAuthStore } from '../stores/authStore'
+import { QUOTA_FIELD_LABELS } from '../constants/enums'
 import type { CrawlTask } from '../types/task'
 import type { ApiError } from '../types/api'
 
@@ -179,9 +201,21 @@ async function submit() {
 async function runSimulation(taskId: string) {
   try {
     await tasks.simulate(taskId)
-    await tasks.load()
   } catch (error_) {
     tasks.error = (error_ as ApiError).message ?? '调度模拟失败'
+  } finally {
+    // 成功或 409 阻止都刷新列表，同步持久化的阻止原因
+    await tasks.load()
   }
+}
+
+function diffTitle(task: CrawlTask): string {
+  return task.quota_diff
+    .map(
+      (item) =>
+        `${item.domain} ${QUOTA_FIELD_LABELS[item.field] ?? item.field}: ` +
+        `${JSON.stringify(item.frozen)} → ${JSON.stringify(item.current)}（冻结 → 当前）`,
+    )
+    .join('\n')
 }
 </script>

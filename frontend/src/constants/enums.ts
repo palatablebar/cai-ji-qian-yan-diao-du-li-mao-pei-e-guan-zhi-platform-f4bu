@@ -43,6 +43,17 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   viewer: '只读观察员',
 }
 
+/** 冻结配额字段标签：与 backend task_service.FROZEN_QUOTA_FIELDS 对齐。 */
+export const QUOTA_FIELD_LABELS: Record<string, string> = {
+  qps_quota: 'qps 配额',
+  crawl_delay_s: 'crawl-delay',
+  max_concurrency: '并发上限',
+  priority: '优先级',
+  robots_status: 'robots 策略',
+  robots_rules: 'robots 规则',
+  site: '站点',
+}
+
 export const SOURCE_LABELS: Record<UrlSource, string> = {
   sitemap: 'sitemap',
   link: '链接发现',

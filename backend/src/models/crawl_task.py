@@ -11,7 +11,12 @@ from src.models.base import Base, TimestampMixin, new_uuid
 
 
 class CrawlTask(Base, TimestampMixin):
-    """采集任务：站点集合 + 调度参数 + 最近一次调度模拟结果（JSON 文本）。"""
+    """采集任务：站点集合 + 调度参数 + 最近一次调度模拟结果（JSON 文本）。
+
+    quota_snapshot 在创建时冻结（qps/crawl-delay/并发/优先级/robots），
+    后续站点修改只影响新任务；已确认结果（finished）不可重跑覆盖。
+    last_block_reason 持久化最近一次运行被阻止的原因，供调度看板展示。
+    """
 
     __tablename__ = "crawl_tasks"
 
@@ -29,3 +34,5 @@ class CrawlTask(Base, TimestampMixin):
     created_by: Mapped[str] = mapped_column(String(120), nullable=False, default="")
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_block_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    last_blocked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

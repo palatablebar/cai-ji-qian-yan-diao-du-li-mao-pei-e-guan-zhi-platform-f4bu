@@ -44,6 +44,20 @@ def session_scope() -> Iterator[Session]:
 
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
+    _ensure_columns()
+
+
+# 命名卷上的既有库：create_all 不会补列，这里做幂等 ALTER（PostgreSQL IF NOT EXISTS）。
+_ENSURE_COLUMN_STATEMENTS: tuple[str, ...] = (
+    "ALTER TABLE crawl_tasks ADD COLUMN IF NOT EXISTS last_block_reason TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE crawl_tasks ADD COLUMN IF NOT EXISTS last_blocked_at TIMESTAMPTZ",
+)
+
+
+def _ensure_columns() -> None:
+    with engine.begin() as conn:
+        for statement in _ENSURE_COLUMN_STATEMENTS:
+            conn.execute(text(statement))
 
 
 def ping_db() -> bool:
